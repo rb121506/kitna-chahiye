@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { CITY_BY_ID, GROUP_META, GROUP_ORDER } from '../lib/cities';
 import { LIFESTYLE_META } from '../lib/constants';
 import { defaultState } from '../lib/engine';
-import { compact, lpa, rupees } from '../lib/format';
+import { compact, lpaFull, rupees } from '../lib/format';
 import { loadScenarios, saveScenarios, type Scenario } from '../lib/storage';
 import { useStore } from './store';
 
@@ -118,7 +118,7 @@ function Scenarios() {
 }
 
 function CopySummary() {
-  const { state: s, calc, all, home } = useStore();
+  const { state: s, calc, all, home, household } = useStore();
   const [copied, setCopied] = useState(false);
   const copy = async () => {
     const best = calc.solved.best;
@@ -127,13 +127,16 @@ function CopySummary() {
       .sort((a, b) => calc.groups[b] - calc.groups[a]).slice(0, 5)
       .map((g) => `${GROUP_META[g].label} ${rupees(calc.groups[g])}`).join(' · ');
     const cmp = s.compare.map((id) => all.find((c) => c.city.id === id)).filter(Boolean)
-      .map((c) => `${c!.city.name} ₹${lpa(c!.solved.best.ctc)} L`).join(' · ');
+      .map((c) => `${c!.city.name} ₹${lpaFull(c!.solved.best.ctc)}`).join(' · ');
+    const ctcLine = household.dual && household.second
+      ? `Required CTC: ₹${lpaFull(household.combinedCtc)} a year combined (you ₹${lpaFull(household.primary.slip.ctc)}, partner ₹${lpaFull(household.second.slip.ctc)})`
+      : `Required CTC: ₹${lpaFull(best.ctc)} a year (${best.regime} regime, tax ${compact(best.tax)})`;
     const text = [
       `Kitna Chahiye: ${home.name}, ${LIFESTYLE_META[s.lifestyle].label.toLowerCase()} lifestyle`,
       `Household: ${s.adults} adult${s.adults > 1 ? 's' : ''}${kids}${s.seniors ? `, ${s.seniors} parent${s.seniors > 1 ? 's' : ''}` : ''}`,
       `Monthly spend: ${rupees(calc.spend + calc.buffer)}`,
       `Take-home needed: ${rupees(calc.need)}/month`,
-      `Required CTC: ₹${lpa(best.ctc)} L a year (${best.regime} regime, tax ${compact(best.tax)})`,
+      ctcLine,
       `Biggest costs: ${groups}`,
       cmp ? `Same life elsewhere: ${cmp}` : '',
     ].filter(Boolean).join('\n');

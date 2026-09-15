@@ -25,6 +25,11 @@ export function lpaUnit(n: number): string {
   return n >= 1e7 ? 'Cr' : 'L';
 }
 
+/** "24.6 L" or "1.32 Cr" — lpa() with its unit attached, so a Cr-scale CTC never gets mislabeled "L". */
+export function lpaFull(n: number): string {
+  return `${lpa(n)} ${lpaUnit(n)}`;
+}
+
 function trim(s: string): string {
   return s.includes('.') ? s.replace(/\.?0+$/, '') : s;
 }

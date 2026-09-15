@@ -1,6 +1,6 @@
 import { createContext, useContext } from 'react';
 import type { City } from '../lib/cities';
-import type { CityCalc } from '../lib/engine';
+import type { CityCalc, HouseholdSolve } from '../lib/engine';
 import type { AppState } from '../lib/types';
 
 export interface UpdateOpts {
@@ -19,6 +19,8 @@ export interface Store {
   calc: CityCalc;
   /** every city, recomputed a beat later so sliders stay smooth */
   all: CityCalc[];
+  /** how the required take-home splits across one or two earners */
+  household: HouseholdSolve;
 }
 
 export const StoreCtx = createContext<Store | null>(null);

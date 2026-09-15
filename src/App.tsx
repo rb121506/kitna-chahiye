@@ -1,30 +1,43 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from 'react';
+import { CanIAfford } from './components/CanIAfford';
 import { Compare } from './components/Compare';
+import { DebtPayoff } from './components/DebtPayoff';
+import { EmergencyFund } from './components/EmergencyFund';
+import { FinancialFreedom } from './components/FinancialFreedom';
 import { Future } from './components/Future';
 import { Header } from './components/Header';
 import { Hero } from './components/Hero';
 import { IndiaRank } from './components/IndiaRank';
+import { NetWorth } from './components/NetWorth';
 import { Offer } from './components/Offer';
 import { Overview } from './components/Overview';
+import { QuickEstimate } from './components/QuickEstimate';
 import { Sidebar } from './components/Sidebar';
 import { StoreCtx, useStore, type Store, type UpdateOpts } from './components/store';
-import { spring } from './components/ui';
+import { Segmented, spring } from './components/ui';
 import { CITIES, CITY_BY_ID } from './lib/cities';
 import { TAX_SOURCES } from './lib/constants';
-import { applyPreset, computeCity, defaultState } from './lib/engine';
-import { compact, lpa } from './lib/format';
+import { applyPreset, computeCity, defaultState, solveHousehold } from './lib/engine';
+import { compact, lpaFull } from './lib/format';
 import { loadState, saveState } from './lib/storage';
 import type { AppState } from './lib/types';
 
-const TABS = [
+const PLANNER_TABS = [
   { id: 'overview', label: 'Breakdown' },
   { id: 'compare', label: 'Compare cities' },
   { id: 'india', label: 'All 62 cities' },
-  { id: 'future', label: 'Next 10 years' },
+  { id: 'future', label: 'Projections' },
   { id: 'offer', label: 'Check an offer' },
+  { id: 'afford', label: 'Can I afford it?' },
 ] as const;
-type TabId = (typeof TABS)[number]['id'];
+const TOOL_TABS = [
+  { id: 'networth', label: 'Net worth' },
+  { id: 'debt', label: 'Debt payoff' },
+  { id: 'emergency', label: 'Emergency fund' },
+  { id: 'freedom', label: 'Financial freedom' },
+] as const;
+type TabId = (typeof PLANNER_TABS)[number]['id'] | (typeof TOOL_TABS)[number]['id'];
 
 const SOURCES = [
   'Numbeo India city indices and rents (1BR/3BR, centre & outskirts), Sep 2026',
@@ -53,7 +66,7 @@ function initialState(): AppState {
 }
 
 function MobileBar() {
-  const { calc } = useStore();
+  const { calc, household } = useStore();
   const [show, setShow] = useState(false);
   useEffect(() => {
     const hero = document.getElementById('hero');
@@ -74,8 +87,8 @@ function MobileBar() {
           transition={spring}
           onClick={() => document.getElementById('hero')?.scrollIntoView({ behavior: 'smooth' })}
         >
-          <span className="mbar-k">You need</span>
-          <b>₹{lpa(calc.solved.best.ctc)} L/yr</b>
+          <span className="mbar-k">{household.dual ? 'Household needs' : 'You need'}</span>
+          <b>₹{lpaFull(household.combinedCtc)}/yr</b>
           <span className="mbar-sub">{compact(calc.need)}/mo in hand</span>
           <span className="mbar-up" aria-hidden="true">↑</span>
         </motion.button>
@@ -86,6 +99,7 @@ function MobileBar() {
 
 export default function App() {
   const [state, setState] = useState<AppState>(initialState);
+  const [section, setSection] = useState<'planner' | 'tools'>('planner');
   const [tab, setTab] = useState<TabId>('overview');
 
   const update = useCallback((fn: (d: AppState) => void, opts?: UpdateOpts) => {
@@ -107,26 +121,39 @@ export default function App() {
 
   const home = CITY_BY_ID[state.cityId] ?? CITIES[0];
   const calc = useMemo(() => computeCity(state, home, home, { bare: true }), [state, home]);
+  const household = useMemo(() => solveHousehold(state, calc, home), [state, calc, home]);
   const deferred = useDeferredValue(state);
   const all = useMemo(() => {
     const h = CITY_BY_ID[deferred.cityId] ?? CITIES[0];
     return CITIES.map((c) => computeCity(deferred, c, h));
   }, [deferred]);
 
-  const store: Store = { state, update, replace, home, calc, all };
+  const store: Store = { state, update, replace, home, calc, all, household };
 
   return (
     <StoreCtx.Provider value={store}>
       <div className="app">
         <Header />
+        <div className="section-switch">
+          <Segmented
+            id="section"
+            ariaLabel="Salary planner or money tools"
+            value={section}
+            options={[
+              { value: 'planner', label: 'Salary planner', hint: 'What CTC your life needs, city by city' },
+              { value: 'tools', label: 'Money tools', hint: 'Net worth, debt payoff, emergency fund, financial freedom' },
+            ]}
+            onChange={(v) => { setSection(v); setTab(v === 'planner' ? 'overview' : 'networth'); }}
+          />
+        </div>
         <div className="layout">
           <div className="hero-slot"><Hero /></div>
           <aside className="sidebar" aria-label="Your expenses">
-            <Sidebar />
+            {state.quickMode ? <QuickEstimate /> : <Sidebar />}
           </aside>
           <main className="content">
             <div className="tabs" role="tablist" aria-label="Results">
-              {TABS.map((t) => (
+              {(section === 'planner' ? PLANNER_TABS : TOOL_TABS).map((t) => (
                 <button key={t.id} id={`tab-${t.id}`} type="button" role="tab" aria-selected={tab === t.id} aria-controls="tab-panel" className={`tab${tab === t.id ? ' is-active' : ''}`} onClick={() => setTab(t.id)}>
                   {t.label}
                   {tab === t.id && <motion.span layoutId="tab-ink" className="tab-ink" transition={spring} />}
@@ -149,6 +176,11 @@ export default function App() {
                 {tab === 'india' && <IndiaRank />}
                 {tab === 'future' && <Future />}
                 {tab === 'offer' && <Offer />}
+                {tab === 'afford' && <CanIAfford />}
+                {tab === 'networth' && <NetWorth />}
+                {tab === 'debt' && <DebtPayoff />}
+                {tab === 'emergency' && <EmergencyFund />}
+                {tab === 'freedom' && <FinancialFreedom />}
               </motion.section>
             </AnimatePresence>
             <footer className="foot">

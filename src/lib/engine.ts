@@ -8,12 +8,12 @@
  */
 import { CITIES, CITY_BY_ID, LPG_DELHI, STATES, type City } from './cities';
 import {
-  AMOUNTS, COLLEGE_FEES, COVER_FACTOR, DAYCARE, FURNISH, HELP_BASE, INFLATION, LOCALITY, PRESCHOOL_FEES,
-  SCHOOL_FEES, SENIOR_PREMIUM, SQFT, SUB_BY_ID, SUB_PRESETS, VEHICLES, ZONE_FACTOR, healthBase, pick,
-  termPerCrore, type IdxKey, type L,
+  AMOUNTS, COLLEGE_FEES, COVER_FACTOR, DAYCARE, FURNISH, GOAL_TYPES, HELP_BASE, INFLATION, LOCALITY,
+  PRESCHOOL_FEES, SCHOOL_FEES, SENIOR_PREMIUM, SQFT, SUB_BY_ID, SUB_PRESETS, VEHICLES, ZONE_FACTOR,
+  criticalIllnessPremium, healthBase, pick, sipForGoal, soloLivingCost, termPerCrore, type IdxKey, type L,
 } from './constants';
-import { roundTo } from './format';
-import { solveBoth, type SalaryCfg, type Solved, type TaxCtx } from './tax';
+import { clamp, roundTo } from './format';
+import { solveBoth, type SalaryCfg, type Slip, type Solved, type TaxCtx } from './tax';
 import {
   LIFESTYLES, type AmountId, type AppState, type Child, type Group, type Lifestyle, type SchoolType,
 } from './types';
@@ -215,7 +215,7 @@ export function salaryCfg(s: AppState): SalaryCfg {
   return { basicPct: x.basicPct, pf: x.pf, gratuity: x.gratuity, variablePct: x.variablePct, npsPct: x.npsPct, nps80ccd1b: x.nps80ccd1b };
 }
 
-const NON_CONSUMPTION = new Set(['homeLoanEmi', 'carEmi', 'personalEmi', 'educationEmi', 'ccRepay', 'bnpl', 'familySupport', 'donations', 'termInsurance']);
+const NON_CONSUMPTION = new Set(['homeLoanEmi', 'carEmi', 'personalEmi', 'educationEmi', 'ccRepay', 'bnpl', 'familySupport', 'donations', 'termInsurance', 'spouseTermInsurance']);
 
 export function computeCity(s: AppState, city: City, home: City, opts: { bare?: boolean } = {}): CityCalc {
   const l = lvl(s);
@@ -343,6 +343,10 @@ export function computeCity(s: AppState, city: City, home: City, opts: { bare?: 
   add('healthInsurance', `Health insurance · ₹${s.health.cover >= 100 ? '1 Cr' : s.health.cover + ' L'}`, 'health', healthAnnual / 12);
   add('parentsInsurance', 'Parents’ health insurance', 'health', parentsAnnual / 12);
   add('termInsurance', `Term life · ₹${s.health.termCr} Cr`, 'health', termAnnual / 12);
+  if (s.adults >= 2) {
+    add('spouseTermInsurance', `Spouse’s term life · ₹${s.health.spouseTermCr} Cr`, 'health', (s.health.spouseTermCr * termPerCrore(s.age)) / 12);
+  }
+  add('criticalIllness', `Critical illness cover · ₹${s.health.criticalIllness} L`, 'health', criticalIllnessPremium(s.age, s.health.criticalIllness) / 12);
   add('medicines', 'Doctor visits & medicines', 'health', amt('medicines'));
   add('gym', 'Gym & fitness', 'health', amt('gym'));
 
@@ -375,9 +379,15 @@ export function computeCity(s: AppState, city: City, home: City, opts: { bare?: 
   if (s.salary.nps80ccd1b) add('nps', 'NPS · 80CCD(1B)', 'savings', 50000 / 12);
   const ef = s.savings.efOn ? (s.savings.efMonths * (spend + buffer)) / (s.savings.efYears * 12) : 0;
   add('emergencyFund', `Emergency fund · ${s.savings.efMonths} months`, 'savings', ef);
+  let goalTotal = 0;
+  for (const g of s.goals) {
+    const monthly = sipForGoal(g.target, g.years, g.returnPct, g.current);
+    goalTotal += monthly;
+    add(`goal-${g.id}`, `${g.name || GOAL_TYPES[g.type].label} · goal`, 'savings', monthly);
+  }
   const sip = amt('sip');
   let need: number;
-  const core = spend + buffer + ef + (s.salary.nps80ccd1b ? 50000 / 12 : 0);
+  const core = spend + buffer + ef + goalTotal + (s.salary.nps80ccd1b ? 50000 / 12 : 0);
   if (s.savings.mode === 'rate') {
     need = core / (1 - s.savings.rate);
     add('savingsGoal', `Savings goal · ${Math.round(s.savings.rate * 100)}% of take-home`, 'savings', need - core);
@@ -413,6 +423,56 @@ export function computeCity(s: AppState, city: City, home: City, opts: { bare?: 
   };
 }
 
+export interface EarnerSolve {
+  label: string;
+  city: City;
+  slip: Slip;
+  need: number;
+  away: number;
+}
+
+export interface HouseholdSolve {
+  dual: boolean;
+  primary: EarnerSolve;
+  second?: EarnerSolve;
+  combinedCtc: number;
+  combinedTakeHome: number;
+}
+
+/**
+ * Splits the household's required take-home between two earners when a second income is on.
+ * Same-city: the two simply split the shared need. A different city adds that earner's own
+ * solo cost of living (rent + groceries + transport for one adult, at that city's prices) on top
+ * of their share — a simplified stand-in for maintaining a second home.
+ */
+export function solveHousehold(s: AppState, calc: CityCalc, home: City): HouseholdSolve {
+  const primaryBase: EarnerSolve = { label: 'You', city: home, slip: calc.solved.best, need: calc.need, away: 0 };
+  if (!s.secondEarner.enabled) {
+    return { dual: false, primary: primaryBase, combinedCtc: calc.solved.best.ctc, combinedTakeHome: calc.solved.best.inHandMonthly };
+  }
+  const split = clamp(s.secondEarner.splitPct, 0, 1);
+  const secondCity = s.secondEarner.cityId === 'same' ? home : (CITY_BY_ID[s.secondEarner.cityId] ?? home);
+  const away = secondCity.id !== home.id ? soloLivingCost(secondCity) : 0;
+  const primaryNeed = calc.need * (1 - split);
+  const secondNeed = calc.need * split + away;
+  const primarySolved = solveBoth(primaryNeed, salaryCfg(s), calc.ctx, s.salary.regime);
+  const secondCfg: SalaryCfg = { basicPct: s.secondEarner.basicPct, pf: s.salary.pf, gratuity: s.salary.gratuity, variablePct: 0, npsPct: 0, nps80ccd1b: false };
+  const secondCtx: TaxCtx = {
+    ptAnnual: STATES[secondCity.state].pt,
+    hraMetro: !!secondCity.hraMetro,
+    rentMonthly: away > 0 ? secondCity.rent[0] * 0.85 : 0,
+    homeLoanEmi: 0, health80dSelf: 0, health80dParents: 0, termPremium: 0, tuition: 0,
+  };
+  const secondSolved = solveBoth(secondNeed, secondCfg, secondCtx, s.secondEarner.regime);
+  const primary: EarnerSolve = { label: 'You', city: home, slip: primarySolved.best, need: primaryNeed, away: 0 };
+  const second: EarnerSolve = { label: 'Partner', city: secondCity, slip: secondSolved.best, need: secondNeed, away };
+  return {
+    dual: true, primary, second,
+    combinedCtc: primary.slip.ctc + second.slip.ctc,
+    combinedTakeHome: primary.slip.inHandMonthly + second.slip.inHandMonthly,
+  };
+}
+
 export function computeAll(s: AppState) {
   const home = CITY_BY_ID[s.cityId] ?? CITIES[0];
   const homeCalc = computeCity(s, home, home, { bare: true });
@@ -441,7 +501,9 @@ export function project(s: AppState, calc: CityCalc, years = 10): ProjectionPoin
     }
     const buffer = consumption * s.savings.buffer;
     const ef = s.savings.efOn ? (s.savings.efMonths * (spend + buffer)) / (s.savings.efYears * 12) : 0;
-    const core = spend + buffer + ef + (s.salary.nps80ccd1b ? 50000 / 12 : 0);
+    // years-remaining shrinks as t grows, so goal contributions are re-solved, not merely inflated
+    const goalTotal = s.goals.reduce((sum, g) => sum + sipForGoal(g.target, Math.max(1, g.years - t), g.returnPct, g.current), 0);
+    const core = spend + buffer + ef + goalTotal + (s.salary.nps80ccd1b ? 50000 / 12 : 0);
     const sip = (calc.lines.find((x) => x.id === 'sip')?.value ?? 0) * grow('sip');
     const need = s.savings.mode === 'rate' ? core / (1 - s.savings.rate) : core + sip;
     const ctx: TaxCtx = {
@@ -504,6 +566,10 @@ export function applyPreset(s: AppState, lifestyle: Lifestyle, force: boolean): 
     const dependents = next.adults > 1 || hh.kids > 0 || next.seniors > 0;
     next.health.termCr = dependents ? pick(l, [0.5, 1, 2, 3]) : pick(l, [0, 0, 0.5, 1]);
   }
+  if (free('health.spouseTermCr')) {
+    next.health.spouseTermCr = next.adults > 1 && (hh.kids > 0 || next.seniors > 0) ? pick(l, [0.5, 1, 1, 2]) : 0;
+  }
+  if (free('health.criticalIllness')) next.health.criticalIllness = pick(l, [0, 10, 25, 25]);
   if (free('subs')) next.subs = [...SUB_PRESETS[l]];
   if (free('savings.rate')) next.savings.rate = pick(l, [0.1, 0.2, 0.25, 0.3]);
   if (free('savings.buffer')) next.savings.buffer = pick(l, [0.05, 0.05, 0.07, 0.1]);
@@ -513,7 +579,7 @@ export function applyPreset(s: AppState, lifestyle: Lifestyle, force: boolean): 
 
 export function defaultState(): AppState {
   const base: AppState = {
-    v: 2,
+    v: 3,
     cityId: 'bengaluru',
     lifestyle: 'comfortable',
     adults: 2,
@@ -526,9 +592,12 @@ export function defaultState(): AppState {
     bills: { acs: 1, acHours: 6, wfh: false, subsidy: true },
     help: { cleaning: true, cook: 2, fullTime: false, nanny: false, driver: false, laundry: false, elderCare: false },
     transport: { vehicle: 'hatch', km: 700 },
-    health: { employerCover: true, cover: 10, parentsCover: 0, termCr: 1 },
+    health: { employerCover: true, cover: 10, parentsCover: 0, termCr: 1, spouseTermCr: 0, criticalIllness: 0 },
     subs: [],
     amounts: {},
+    goals: [],
+    secondEarner: { enabled: false, cityId: 'same', splitPct: 0.5, basicPct: 0.5, regime: 'auto' },
+    quickMode: true,
     savings: { mode: 'rate', rate: 0.2, efOn: false, efMonths: 6, efYears: 2, buffer: 0.05 },
     salary: { regime: 'auto', basicPct: 0.5, pf: 'full', gratuity: true, variablePct: 0, npsPct: 0, nps80ccd1b: false },
     offerLpa: null,
@@ -538,4 +607,13 @@ export function defaultState(): AppState {
     touched: {},
   };
   return applyPreset(base, 'comfortable', true);
+}
+
+/** Adds or removes school-age children so the count matches `n` — used by Quick Estimate's simple stepper. */
+export function setKidCount(s: AppState, n: number): AppState {
+  const next = structuredClone(s);
+  const cur = next.children.length;
+  if (n < cur) next.children = next.children.slice(0, n);
+  else for (let i = cur; i < n; i++) next.children.push({ id: `k${Date.now().toString(36)}${i}`, age: 'school', school: pick(lvl(next), ['budget', 'mid', 'premium', 'intl']) });
+  return next;
 }

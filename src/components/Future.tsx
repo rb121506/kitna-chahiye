@@ -1,7 +1,7 @@
 import { motion } from 'motion/react';
 import { useMemo, useState } from 'react';
 import { project, type ProjectionPoint } from '../lib/engine';
-import { compact, lpa, pct } from '../lib/format';
+import { compact, lpaFull, pct } from '../lib/format';
 import { niceTicks, useWidth } from './chart';
 import { useStore } from './store';
 import { AnimatedNumber, Segmented, Slider } from './ui';
@@ -27,7 +27,7 @@ function Chart({ pts, yours }: { pts: ProjectionPoint[]; yours: number[] | null 
   const endReq = y(pts[n - 1].ctc);
   const endYou = yours ? y(yours[n - 1]) : 0;
   const clash = yours && Math.abs(endReq - endYou) < 30;
-  const labelStep = n > 8 ? 2 : 1;
+  const labelStep = n > 20 ? 5 : n > 8 ? 2 : 1;
 
   return (
     <div className="chart" ref={ref}>
@@ -64,8 +64,8 @@ function Chart({ pts, yours }: { pts: ProjectionPoint[]; yours: number[] | null 
           {you && <motion.path initial={false} animate={{ d: you }} transition={{ duration: 0.5 }} className="line-you" />}
           {w >= 520 && (
             <>
-              <text x={x(n - 1) + 10} y={endReq + (clash && endReq < endYou ? -8 : clash ? 8 : 0)} className="end-label req" dominantBaseline="middle">₹{lpa(pts[n - 1].ctc)} L needed</text>
-              {yours && <text x={x(n - 1) + 10} y={endYou + (clash && endYou <= endReq ? -8 : clash ? 8 : 0)} className="end-label you" dominantBaseline="middle">₹{lpa(yours[n - 1])} L yours</text>}
+              <text x={x(n - 1) + 10} y={endReq + (clash && endReq < endYou ? -8 : clash ? 8 : 0)} className="end-label req" dominantBaseline="middle">₹{lpaFull(pts[n - 1].ctc)} needed</text>
+              {yours && <text x={x(n - 1) + 10} y={endYou + (clash && endYou <= endReq ? -8 : clash ? 8 : 0)} className="end-label you" dominantBaseline="middle">₹{lpaFull(yours[n - 1])} yours</text>}
             </>
           )}
           <circle cx={x(n - 1)} cy={endReq} r={4.5} className="end-dot req" />
@@ -82,8 +82,8 @@ function Chart({ pts, yours }: { pts: ProjectionPoint[]; yours: number[] | null 
       {hover !== null && w > 0 && (
         <div className="chart-tip" style={{ left: Math.min(Math.max(x(hover), 90), w - 90), top: 8 }}>
           <b>{START_YEAR + pts[hover].year}</b>
-          <span><i className="sw req" />Needed ₹{lpa(pts[hover].ctc)} L</span>
-          {yours && <span><i className="sw you" />Yours ₹{lpa(yours[hover])} L</span>}
+          <span><i className="sw req" />Needed ₹{lpaFull(pts[hover].ctc)}</span>
+          {yours && <span><i className="sw you" />Yours ₹{lpaFull(yours[hover])}</span>}
           <small>{compact(pts[hover].need)}/mo take-home</small>
         </div>
       )}
@@ -103,9 +103,12 @@ const ASSUMPTIONS: [string, number][] = [
   ['EMIs & term premiums', 0],
 ];
 
+const YEAR_OPTIONS = [5, 10, 15, 20, 30] as const;
+type Years = (typeof YEAR_OPTIONS)[number];
+
 export function Future() {
   const { state: s, update, calc, home } = useStore();
-  const [years, setYears] = useState<5 | 10>(10);
+  const [years, setYears] = useState<Years>(10);
   const pts = useMemo(() => project(s, calc, years), [s, calc, years]);
   const current = s.offerLpa ? s.offerLpa * 1e5 : null;
   const yours = current ? pts.map((p) => current * Math.pow(1 + s.hikePct, p.year)) : null;
@@ -123,7 +126,7 @@ export function Future() {
             <h3 className="card-title">What this life will cost in {START_YEAR + years}</h3>
             <p className="card-sub">Same household and choices in {home.name}, with each cost rising at its own 2026 inflation rate</p>
           </div>
-          <Segmented<5 | 10> id="horizon" size="sm" stretch={false} ariaLabel="Horizon" value={years} options={[{ value: 5, label: '5 years' }, { value: 10, label: '10 years' }]} onChange={setYears} />
+          <Segmented<Years> id="horizon" size="sm" stretch={false} ariaLabel="Horizon" value={years} options={YEAR_OPTIONS.map((y) => ({ value: y, label: `${y} yrs` }))} onChange={setYears} />
         </header>
         <div className="legend">
           <span><i className="sw req" />CTC needed</span>
@@ -133,7 +136,7 @@ export function Future() {
         <div className="stat-row">
           <div className="stat">
             <span className="stat-label">Needed in {START_YEAR + years}</span>
-            <AnimatedNumber className="stat-val" value={last.ctc} format={(v) => `₹${lpa(v)} L`} />
+            <AnimatedNumber className="stat-val" value={last.ctc} format={(v) => `₹${lpaFull(v)}`} />
             <span className="stat-sub">{compact(last.need)}/mo take-home</span>
           </div>
           <div className="stat">

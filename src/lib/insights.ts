@@ -1,8 +1,102 @@
+import type { City } from './cities';
 import { STATES } from './cities';
-import { LOCALITY } from './constants';
-import type { CityCalc } from './engine';
-import { compact, lpa, pct } from './format';
-import type { AppState } from './types';
+import { LOCALITY, SUB_BY_ID } from './constants';
+import { amountHome, computeCity, type CityCalc, type Line } from './engine';
+import { compact, lpaFull, pct } from './format';
+import type { AmountId, AppState } from './types';
+
+export interface Lever {
+  id: string;
+  label: string;
+  cutLabel: string;
+  monthlySave: number;
+  ctcDrop: number;
+}
+
+function cutAmount(id: AmountId, pct = 0.2) {
+  return (s: AppState, _l: Line, home: City): AppState => {
+    const n = structuredClone(s);
+    const cur = amountHome(id, s, home);
+    n.amounts[id] = Math.max(0, Math.round(cur * (1 - pct)));
+    return n;
+  };
+}
+
+const LEVER_CUT: Record<string, (s: AppState, l: Line, home: City) => AppState | null> = {
+  rent: (s, l) => {
+    if (s.housing.type !== 'rent' && s.housing.type !== 'pg') return null;
+    const n = structuredClone(s);
+    n.housing.customRent = Math.round((l.value * 0.85) / 500) * 500;
+    return n;
+  },
+  maintenance: (s, l) => {
+    const n = structuredClone(s);
+    n.amounts.maintenance = Math.round((l.value * 0.8) / 100) * 100;
+    return n;
+  },
+  groceries: cutAmount('groceries'),
+  dining: cutAmount('dining'),
+  shopping: cutAmount('shopping'),
+  personalCare: cutAmount('personalCare'),
+  entertainment: cutAmount('entertainment'),
+  cabs: cutAmount('cabs'),
+  transit: cutAmount('transit'),
+  coaching: cutAmount('coaching'),
+  activities: cutAmount('activities'),
+  otherSubs: cutAmount('otherSubs'),
+  medicines: cutAmount('medicines'),
+  gym: cutAmount('gym'),
+  delivery: (s, _l, home) => {
+    const n = structuredClone(s);
+    const cur = amountHome('deliveryOrders', s, home);
+    n.amounts.deliveryOrders = Math.max(0, Math.round(cur * 0.75));
+    return n;
+  },
+  travel: cutAmount('travelYear', 0.25),
+  festivals: cutAmount('festivalsYear', 0.2),
+  gadgets: cutAmount('gadgetsYear', 0.3),
+  subscriptions: (s) => {
+    if (s.subs.length === 0) return null;
+    const priciest = [...s.subs].sort((a, b) => (SUB_BY_ID[b]?.monthly ?? 0) - (SUB_BY_ID[a]?.monthly ?? 0))[0];
+    const n = structuredClone(s);
+    n.subs = s.subs.filter((x) => x !== priciest);
+    return n;
+  },
+};
+
+const LEVER_VERB: Record<string, string> = {
+  rent: 'Move to a slightly cheaper flat', maintenance: 'A lower-maintenance building', groceries: 'Trim groceries a fifth',
+  dining: 'Eat out a little less', shopping: 'Cut shopping back', personalCare: 'Trim salon & personal care',
+  entertainment: 'Fewer nights out', cabs: 'Take fewer cabs', transit: 'Cut transit spend', coaching: 'Trim tuition spend',
+  activities: 'Cut one activity', otherSubs: 'Drop an app or two', medicines: 'Trim the health & wellness budget',
+  gym: 'A cheaper gym', delivery: "Cut delivery orders by a quarter", travel: 'A lighter travel budget',
+  festivals: 'Trim festival spending', gadgets: 'Space out gadget upgrades', subscriptions: 'Drop your priciest subscription',
+};
+
+/** The single largest recurring cost, excluding savings. */
+export function biggestExpense(calc: CityCalc): Line | null {
+  const lines = calc.lines.filter((l) => l.group !== 'savings');
+  return lines.length ? [...lines].sort((a, b) => b.value - a.value)[0] : null;
+}
+
+/** What trimming your biggest costs would actually save on the required CTC — computed, not guessed. */
+export function biggestLevers(s: AppState, calc: CityCalc, home: City, n = 2): Lever[] {
+  const candidates = calc.lines
+    .filter((l) => l.group !== 'savings' && LEVER_CUT[l.id] && l.value > 300)
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 7);
+  const out: Lever[] = [];
+  for (const l of candidates) {
+    const mutated = LEVER_CUT[l.id](s, l, home);
+    if (!mutated) continue;
+    const next = computeCity(mutated, home, home);
+    const ctcDrop = calc.solved.best.ctc - next.solved.best.ctc;
+    if (ctcDrop < 1500) continue;
+    const monthlySave = l.value - (next.lines.find((x) => x.id === l.id)?.value ?? 0);
+    out.push({ id: l.id, label: l.label, cutLabel: LEVER_VERB[l.id] ?? `Trim ${l.label.toLowerCase()}`, monthlySave, ctcDrop });
+  }
+  return out.sort((a, b) => b.ctcDrop - a.ctcDrop).slice(0, n);
+}
 
 export type Tone = 'high' | 'watch' | 'good' | 'info';
 
@@ -109,7 +203,7 @@ export function buildInsights(s: AppState, calc: CityCalc, all: CityCalc[] | nul
       out.push({
         id: 'move',
         tone: 'info',
-        title: `${cheapest.city.name} needs ₹${lpa(saving)} L less`,
+        title: `${cheapest.city.name} needs ₹${lpaFull(saving)} less`,
         body: `Same lifestyle, ${pct(saving / solved.best.ctc)} lower CTC. It's the cheapest tier-${cheapest.city.tier} city for how you live.`,
       });
     }

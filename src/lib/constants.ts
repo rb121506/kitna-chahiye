@@ -1,4 +1,4 @@
-import type { AgeBand, AmountId, Lifestyle, Locality, SchoolType, Vehicle } from './types';
+import type { AgeBand, AmountId, GoalType, Lifestyle, Locality, SchoolType, Vehicle } from './types';
 
 /** Lifestyle picker value 0..3 */
 export type L = 0 | 1 | 2 | 3;
@@ -87,6 +87,53 @@ export function termPerCrore(age: number): number {
   if (age <= 50) return 40000;
   return 60000;
 }
+
+/** Critical-illness rider/standalone cover, ₹ per year, by age and cover level (2026 retail quotes). */
+export function criticalIllnessPremium(age: number, coverLakh: number): number {
+  if (coverLakh <= 0) return 0;
+  const perLakh = age <= 30 ? 550 : age <= 35 ? 700 : age <= 40 ? 950 : age <= 45 ? 1350 : age <= 50 ? 1900 : 2800;
+  return perLakh * coverLakh;
+}
+
+export const GOAL_TYPES: Record<GoalType, { label: string; blurb: string; defaultReturn: number }> = {
+  house: { label: 'House down payment', blurb: 'Usually 20% of the property value', defaultReturn: 7 },
+  education: { label: "Child's education", blurb: 'A degree, 10–18 years out', defaultReturn: 10 },
+  retirement: { label: 'Retirement corpus', blurb: 'Grows for decades — can ride out more risk', defaultReturn: 11 },
+  custom: { label: 'Other goal', blurb: 'A car, a wedding, a sabbatical…', defaultReturn: 8 },
+};
+
+/** Monthly SIP needed to reach `target` in `years`, given `current` savings and an assumed annual return. */
+export function sipForGoal(target: number, years: number, returnPct: number, current: number): number {
+  if (target <= 0 || years <= 0) return 0;
+  const n = years * 12;
+  const r = returnPct / 1200;
+  const futureCurrent = current * Math.pow(1 + r, n);
+  const remaining = Math.max(0, target - futureCurrent);
+  if (remaining === 0) return 0;
+  const factor = r === 0 ? n : (Math.pow(1 + r, n) - 1) / r * (1 + r);
+  return remaining / factor;
+}
+
+/** A single adult's own cost of living in a city — used when a second earner works away from the household. */
+export function soloLivingCost(city: import('./cities').City): number {
+  const rent = city.rent[0] * 0.85;
+  const groceries = 4500 * (city.groc / 100);
+  const transport = 2200 * (city.transit / 100);
+  const mobile = 450;
+  const misc = 2500 * (city.col / 100);
+  return rent + groceries + transport + mobile + misc;
+}
+
+export const FI_DEFAULTS = { withdrawalPct: 4, returnPct: 8, inflationPct: 6 };
+
+export type DebtStrategy = 'avalanche' | 'snowball';
+export const DEBT_STRATEGY_META: Record<DebtStrategy, { label: string; blurb: string }> = {
+  avalanche: { label: 'Avalanche', blurb: 'Pay off the highest interest rate first — cheapest overall' },
+  snowball: { label: 'Snowball', blurb: 'Pay off the smallest balance first — fastest early wins' },
+};
+
+export const NET_WORTH_ASSET_LABELS = ['Cash & FDs', 'EPF / PPF / NPS', 'Mutual funds & stocks', 'Real estate', 'Other assets'] as const;
+export const NET_WORTH_LIABILITY_LABELS = ['Home loan outstanding', 'Car loan outstanding', 'Other loans', 'Credit card dues'] as const;
 
 export interface SubItem {
   id: string;
@@ -184,7 +231,7 @@ export const INFLATION: Record<string, number> = {
   cleaning: 0.08, cook: 0.08, fullTime: 0.08, nanny: 0.08, driver: 0.08, laundry: 0.07, elderCare: 0.08,
   fuel: 0.04, vehicleUpkeep: 0.06, parking: 0.05, cabs: 0.06, transit: 0.05,
   schoolFees: 0.1, daycare: 0.09, babyEssentials: 0.06, coaching: 0.1, activities: 0.07, college: 0.1, collegeLiving: 0.06,
-  healthInsurance: 0.12, parentsInsurance: 0.13, termInsurance: 0, medicines: 0.1, gym: 0.06,
+  healthInsurance: 0.12, parentsInsurance: 0.13, termInsurance: 0, spouseTermInsurance: 0, criticalIllness: 0.1, medicines: 0.1, gym: 0.06,
   subscriptions: 0.05, otherSubs: 0.05,
   shopping: 0.05, personalCare: 0.06, entertainment: 0.06, travel: 0.06, festivals: 0.06, gadgets: 0.03, pets: 0.07,
   carEmi: 0, personalEmi: 0, educationEmi: 0, ccRepay: 0, bnpl: 0, familySupport: 0.05, donations: 0.04,

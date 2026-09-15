@@ -2,12 +2,13 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useState, type ReactNode } from 'react';
 import { LPG_DELHI, STATES } from '../lib/cities';
 import {
-  AGE_BANDS, AMOUNTS, LIFESTYLE_META, LOCALITY, SCHOOL_TYPES, SUBSCRIPTIONS, SUB_BY_ID, VEHICLES, pick,
+  AGE_BANDS, AMOUNTS, GOAL_TYPES, LIFESTYLE_META, LOCALITY, SCHOOL_TYPES, SUBSCRIPTIONS, SUB_BY_ID, VEHICLES, pick,
 } from '../lib/constants';
 import { amountHome, applyPreset, estRent, helpEstimate, household, lvl } from '../lib/engine';
-import { compact, roundTo, rupees } from '../lib/format';
+import { compact, lpaFull, roundTo, rupees } from '../lib/format';
 import {
-  LIFESTYLES, type AgeBand, type AmountId, type Group, type HousingType, type Locality, type SchoolType, type Vehicle,
+  LIFESTYLES, type AgeBand, type AmountId, type Goal, type GoalType, type Group, type HousingType, type Locality,
+  type SchoolType, type Vehicle,
 } from '../lib/types';
 import { CityPicker } from './CityPicker';
 import { useStore } from './store';
@@ -20,7 +21,7 @@ const IDS = {
   help: ['cleaning', 'cook', 'fullTime', 'nanny', 'driver', 'elderCare', 'laundry'],
   transport: ['fuel', 'vehicleUpkeep', 'parking', 'cabs', 'transit'],
   kids: ['schoolFees', 'schoolBus', 'daycare', 'babyEssentials', 'coaching', 'activities', 'college', 'collegeLiving'],
-  health: ['healthInsurance', 'parentsInsurance', 'termInsurance', 'medicines', 'gym'],
+  health: ['healthInsurance', 'parentsInsurance', 'termInsurance', 'spouseTermInsurance', 'criticalIllness', 'medicines', 'gym'],
   subs: ['subscriptions', 'otherSubs'],
   life: ['shopping', 'personalCare', 'entertainment', 'travel', 'festivals', 'gadgets', 'pets'],
   dues: ['carEmi', 'personalEmi', 'educationEmi', 'ccRepay', 'bnpl', 'familySupport', 'donations'],
@@ -228,8 +229,85 @@ function EmiCalc() {
   );
 }
 
+function GoalsEditor() {
+  const { state: s, update } = useStore();
+  const add = () =>
+    update((d) => {
+      d.goals.push({ id: `g${Date.now().toString(36)}`, type: 'house', name: '', target: 2000000, years: 5, returnPct: GOAL_TYPES.house.defaultReturn, current: 0 });
+    });
+  return (
+    <div className="kids">
+      <div className="kids-head">
+        <span className="field-label"><span>Savings goals</span>{s.goals.length === 0 && <small>A house, a degree, retirement…</small>}</span>
+        <button id="add-goal" type="button" className="btn btn-sm" onClick={add} disabled={s.goals.length >= 6}>+ Add goal</button>
+      </div>
+      <AnimatePresence initial={false}>
+        {s.goals.map((g, i) => {
+          const patch = (p: Partial<Goal>) => update((d) => { Object.assign(d.goals[i], p); });
+          return (
+            <motion.div key={g.id} className="child-row" initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.25 }}>
+              <div className="child-inner">
+                <div className="child-top">
+                  <select id={`goal-type-${g.id}`} className="select" aria-label="Goal type" value={g.type} onChange={(e) => patch({ type: e.target.value as GoalType, returnPct: GOAL_TYPES[e.target.value as GoalType].defaultReturn })}>
+                    {(Object.keys(GOAL_TYPES) as GoalType[]).map((t) => <option key={t} value={t}>{GOAL_TYPES[t].label}</option>)}
+                  </select>
+                  <button type="button" className="link-btn" onClick={() => update((d) => { d.goals.splice(i, 1); })} aria-label="Remove goal">Remove</button>
+                </div>
+                <Slider id={`goal-target-${g.id}`} label="Target amount" value={g.target} max={50000000} step={10000} unit="rupee" curve={2.4} onChange={(v) => patch({ target: v })} />
+                <div className="grid-2">
+                  <Slider id={`goal-years-${g.id}`} label="Years to reach it" value={g.years} min={1} max={30} step={1} unit="years" onChange={(v) => patch({ years: v })} />
+                  <Slider id={`goal-current-${g.id}`} label="Already saved" value={g.current} max={g.target} step={5000} unit="rupee" curve={1.6} onChange={(v) => patch({ current: v })} />
+                </div>
+                <Slider id={`goal-return-${g.id}`} label="Expected annual return" hint={GOAL_TYPES[g.type].blurb} value={g.returnPct} min={4} max={15} step={0.5} unit="rate" onChange={(v) => patch({ returnPct: v })} />
+              </div>
+            </motion.div>
+          );
+        })}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function SecondEarnerSection() {
+  const { state: s, update, home, household } = useStore();
+  const on = s.secondEarner.enabled;
+  return (
+    <>
+      <Toggle id="second-earner" label="Add a second income" hint="Split the household's required take-home across two earners" checked={on} onChange={(v) => update((d) => { d.secondEarner.enabled = v; })} />
+      {on && household.second && (
+        <>
+          <Field label="Where the second earner works">
+            <CityPicker
+              id="second-city"
+              variant="field"
+              value={s.secondEarner.cityId === 'same' ? home.id : s.secondEarner.cityId}
+              onChange={(id) => update((d) => { d.secondEarner.cityId = id === home.id ? 'same' : id; })}
+              ariaLabel="Second earner's city"
+            />
+          </Field>
+          {s.secondEarner.cityId !== 'same' && (
+            <p className="note">Different city: their own rent, groceries and transport are added on top of their share, since they're keeping a second home.</p>
+          )}
+          <Slider id="second-split" label="Share of shared costs they cover" value={Math.round(s.secondEarner.splitPct * 100)} min={0} max={100} step={5} unit="pct" onChange={(v) => update((d) => { d.secondEarner.splitPct = v / 100; })} />
+          <Slider id="second-basic" label="Their basic pay" value={Math.round(s.secondEarner.basicPct * 100)} min={30} max={70} step={1} unit="pct" onChange={(v) => update((d) => { d.secondEarner.basicPct = v / 100; })} />
+          <Field label="Their tax regime">
+            <Segmented id="second-regime" size="sm" ariaLabel="Second earner tax regime" value={s.secondEarner.regime}
+              options={[{ value: 'auto', label: 'Best for them' }, { value: 'new', label: 'New' }, { value: 'old', label: 'Old' }]}
+              onChange={(v) => update((d) => { d.secondEarner.regime = v; })} />
+          </Field>
+          <div className="readout">
+            <span className="readout-label">You need · Partner needs</span>
+            <span className="readout-val"><b>₹{lpaFull(household.primary.slip.ctc)}</b> · <b>₹{lpaFull(household.second.slip.ctc)}</b>/yr</span>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
 export function Sidebar() {
   const { state: s, update, replace, calc, home } = useStore();
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const amount = useAmountSlider();
   const lineVal = (id: string) => calc.lines.find((l) => l.id === id)?.value ?? 0;
   const sum = (ids: string[]) => ids.reduce((t, id) => t + lineVal(id), 0);
@@ -261,11 +339,16 @@ export function Sidebar() {
           <p className="muted">
             Every change re-prices your salary instantly. Numbers start from a typical {LIFESTYLE_META[s.lifestyle].label.toLowerCase()} household. Drag anything to make it yours.
           </p>
-          {edits > 0 && (
-            <button type="button" className="link-btn" onClick={() => replace(applyPreset(s, s.lifestyle, true))}>
-              Undo my {edits} tweak{edits > 1 ? 's' : ''}
+          <div className="side-links">
+            {edits > 0 && (
+              <button type="button" className="link-btn" onClick={() => replace(applyPreset(s, s.lifestyle, true))}>
+                Undo my {edits} tweak{edits > 1 ? 's' : ''}
+              </button>
+            )}
+            <button id="back-to-quick" type="button" className="link-btn" onClick={() => update((d) => { d.quickMode = true; })}>
+              ← Back to quick estimate
             </button>
-          )}
+          </div>
         </div>
 
         <Field label="City you live in, or are moving to">
@@ -443,6 +526,7 @@ export function Sidebar() {
           {amount('deliveryOrders', { detail: `≈ ${rupees(lineVal('delivery'))}/mo incl. platform & delivery fees` })}
         </Section>
 
+        {(advancedOpen || IDS.help.some((id) => lineVal(id) > 0)) && (
         <Section id="help" group="help" title="Help at home" summary={pg ? 'Included with PG' : `${IDS.help.filter((id) => lineVal(id) > 0).length} helpers`} total={sum(IDS.help)}>
           {pg ? (
             <p className="note">Cleaning is part of your PG rent.</p>
@@ -470,6 +554,7 @@ export function Sidebar() {
             </>
           )}
         </Section>
+        )}
 
         <Section id="transport" group="transport" title="Getting around" summary={spec.label} total={sum(IDS.transport)}>
           <Field label="Vehicle you run">
@@ -526,6 +611,11 @@ export function Sidebar() {
           {amount('transit', { hint: home.metro ? `${home.name} has a metro` : 'Buses & local transport' })}
         </Section>
 
+        <button id="show-advanced" type="button" className="advanced-toggle" onClick={() => setAdvancedOpen((v) => !v)}>
+          <span>{advancedOpen ? 'Hide advanced options' : 'Show more — help, health, loans, savings, second income…'}</span>
+          <motion.span className="advanced-chev" aria-hidden="true" animate={{ rotate: advancedOpen ? 180 : 0 }} transition={{ duration: 0.2 }}>▾</motion.span>
+        </button>
+
         {hh.kids > 0 && (
           <Section id="kids" group="kids" title="Children" summary={`${hh.kids} child${hh.kids > 1 ? 'ren' : ''} · fees re-priced per city`} total={sum(IDS.kids)}>
             <Readout label="School & preschool fees" tip="All-in yearly fees (tuition, annual charges, books, uniform) for the school type you picked, scaled to this city. Private fees have risen 10–15% a year recently.">
@@ -541,6 +631,7 @@ export function Sidebar() {
           </Section>
         )}
 
+        {advancedOpen && (
         <Section id="health" group="health" title="Health & insurance" summary={s.health.termCr ? `₹${s.health.termCr} Cr term cover` : 'No term cover'} total={sum(IDS.health)}>
           <Toggle id="employer-cover" label="Employer group health cover" hint="Ends when you change jobs" checked={s.health.employerCover} onChange={(v) => update((d) => { d.health.employerCover = v; })} />
           <Field label="Your own family floater" hint={lineVal('healthInsurance') ? `${rupees(lineVal('healthInsurance') * 12)}/yr at age ${s.age}, ${home.zone === 'A' ? 'Zone A' : home.zone === 'B' ? 'Zone B' : 'Zone C'} pricing` : 'Relying on employer cover only'}>
@@ -575,15 +666,41 @@ export function Sidebar() {
               onChange={(v) => update((d) => { d.health.termCr = v; }, { touch: 'health.termCr' })}
             />
           </Field>
+          {s.adults >= 2 && (
+            <Field label="Spouse’s term life cover" hint={s.health.spouseTermCr ? `${rupees(lineVal('spouseTermInsurance') * 12)}/yr` : undefined}>
+              <Segmented<number>
+                id="spouse-term"
+                size="sm"
+                ariaLabel="Spouse term life cover"
+                value={s.health.spouseTermCr}
+                options={[{ value: 0, label: 'None' }, { value: 0.5, label: '50 L' }, { value: 1, label: '1 Cr' }, { value: 2, label: '2 Cr' }]}
+                onChange={(v) => update((d) => { d.health.spouseTermCr = v; }, { touch: 'health.spouseTermCr' })}
+              />
+            </Field>
+          )}
+          <Field label="Critical illness cover" hint={s.health.criticalIllness ? `${rupees(lineVal('criticalIllness') * 12)}/yr — pays out in a lump sum on diagnosis` : 'Covers cancer, heart attack & stroke, on top of hospital insurance'}>
+            <Segmented<number>
+              id="critical-illness"
+              size="sm"
+              ariaLabel="Critical illness cover"
+              value={s.health.criticalIllness}
+              options={[{ value: 0, label: 'None' }, { value: 10, label: '₹10 L' }, { value: 25, label: '₹25 L' }, { value: 50, label: '₹50 L' }]}
+              onChange={(v) => update((d) => { d.health.criticalIllness = v; }, { touch: 'health.criticalIllness' })}
+            />
+          </Field>
           {amount('medicines')}
           {amount('gym')}
         </Section>
+        )}
 
+        {advancedOpen && (
         <Section id="subs" group="lifestyle" title="Subscriptions" summary={`${s.subs.length} active · India prices, Sep 2026`} total={sum(IDS.subs)}>
           <SubChips />
           {amount('otherSubs', { hint: 'Swiggy One, Zomato Gold, Kindle, software…' })}
         </Section>
+        )}
 
+        {advancedOpen && (
         <Section id="life" group="lifestyle" title="Lifestyle" summary="Shopping, outings, travel, gifts" total={sum(IDS.life)}>
           {amount('shopping')}
           {amount('personalCare')}
@@ -593,7 +710,9 @@ export function Sidebar() {
           {amount('gadgetsYear', { hint: 'Per year' })}
           {s.pets > 0 && <Readout label={`Pets · ${s.pets}`} tip="Food, vet, grooming and boarding, scaled to city prices."><b>{rupees(lineVal('pets'))}</b>/mo</Readout>}
         </Section>
+        )}
 
+        {(advancedOpen || calc.emis > 0) && (
         <Section id="dues" group="dues" title="Loans & family" summary={calc.emis > 0 ? `${compact(calc.emis)} in EMIs & dues` : 'No EMIs yet'} total={sum(IDS.dues)}>
           {amount('carEmi')}
           {amount('personalEmi')}
@@ -604,8 +723,10 @@ export function Sidebar() {
           {amount('donations')}
           <EmiCalc />
         </Section>
+        )}
 
-        <Section id="save" group="savings" title="Savings & safety net" summary={s.savings.mode === 'rate' ? `Saving ${Math.round(s.savings.rate * 100)}% of take-home` : 'Fixed monthly investing'} total={sum(IDS.save)}>
+        {advancedOpen && (
+        <Section id="save" group="savings" title="Savings & safety net" summary={s.savings.mode === 'rate' ? `Saving ${Math.round(s.savings.rate * 100)}% of take-home` : 'Fixed monthly investing'} total={calc.groups.savings}>
           <Segmented
             id="save-mode"
             size="sm"
@@ -625,8 +746,17 @@ export function Sidebar() {
               <Stepper id="ef-years" label="Years to build" value={s.savings.efYears} min={1} max={5} onChange={(v) => update((d) => { d.savings.efYears = v; })} />
             </div>
           )}
+          <GoalsEditor />
         </Section>
+        )}
 
+        {advancedOpen && (
+        <Section id="second" title="Second income" summary={s.secondEarner.enabled ? 'Dual income · split need' : 'Single income'}>
+          <SecondEarnerSection />
+        </Section>
+        )}
+
+        {advancedOpen && (
         <Section id="salary" title="Salary structure & tax" summary={`${s.salary.regime === 'auto' ? 'Best regime' : s.salary.regime === 'new' ? 'New regime' : 'Old regime'} · basic ${Math.round(s.salary.basicPct * 100)}%`}>
           <Field label="Tax regime">
             <Segmented
@@ -658,6 +788,7 @@ export function Sidebar() {
             {home.hraMetro ? `${home.name} gets the 50% HRA metro rate.` : `HRA exemption at 40% of basic here.`}
           </p>
         </Section>
+        )}
       </div>
     </div>
   );

@@ -52,8 +52,30 @@ export type AmountId =
   | 'donations'
   | 'sip';
 
+export type GoalType = 'house' | 'education' | 'retirement' | 'custom';
+
+export interface Goal {
+  id: string;
+  type: GoalType;
+  name: string;
+  target: number;
+  years: number;
+  returnPct: number;
+  current: number;
+}
+
+export interface SecondEarner {
+  enabled: boolean;
+  /** 'same' = works in the household's home city */
+  cityId: string;
+  /** share (0..1) of the shared household need this earner covers */
+  splitPct: number;
+  basicPct: number;
+  regime: 'auto' | Regime;
+}
+
 export interface AppState {
-  v: 2;
+  v: 3;
   cityId: string;
   lifestyle: Lifestyle;
   adults: number;
@@ -82,9 +104,20 @@ export interface AppState {
     elderCare: boolean;
   };
   transport: { vehicle: Vehicle; km: number };
-  health: { employerCover: boolean; cover: number; parentsCover: number; termCr: number };
+  health: {
+    employerCover: boolean;
+    cover: number;
+    parentsCover: number;
+    termCr: number;
+    spouseTermCr: number;
+    criticalIllness: number;
+  };
   subs: string[];
   amounts: Partial<Record<AmountId, number>>;
+  goals: Goal[];
+  secondEarner: SecondEarner;
+  /** true = the compact 4-field entry point is shown instead of the full sidebar */
+  quickMode: boolean;
   savings: {
     mode: SavingsMode;
     rate: number;

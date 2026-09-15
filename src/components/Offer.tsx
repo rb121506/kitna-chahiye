@@ -1,9 +1,11 @@
 import { motion } from 'motion/react';
 import { useMemo } from 'react';
 import { CITY_BY_ID } from '../lib/cities';
-import { computeCity, salaryCfg } from '../lib/engine';
-import { compact, lpa, pct, rupees } from '../lib/format';
+import { LIFESTYLE_META } from '../lib/constants';
+import { applyPreset, computeCity, salaryCfg } from '../lib/engine';
+import { compact, lpaFull, pct, rupees } from '../lib/format';
 import { solveBoth, takeHome } from '../lib/tax';
+import { LIFESTYLES } from '../lib/types';
 import { useStore } from './store';
 import { AnimatedNumber, Slider } from './ui';
 
@@ -33,6 +35,16 @@ export function Offer() {
 
   const byCity = useMemo(() => all.map((c) => ({ c, left: takeHome(ctc, cfg, c.ctx, s.salary.regime).best.inHandMonthly - c.need }))
     .sort((a, b) => b.left - a.left), [all, ctc, cfg, s.salary.regime]);
+  const lifestyleFit = useMemo(
+    () => LIFESTYLES.map((l) => {
+      const presetState = applyPreset(s, l, true);
+      const presetCalc = computeCity(presetState, home, home);
+      return { lifestyle: l, ctc: presetCalc.solved.best.ctc, fits: presetCalc.solved.best.ctc <= ctc };
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [s.cityId, s.adults, s.seniors, s.children, s.age, home, ctc],
+  );
+
   const equivalents = useMemo(() => {
     const ratio = inHand / calc.need;
     return s.compare.filter((id) => id !== home.id && CITY_BY_ID[id]).slice(0, 3).map((id) => {
@@ -108,6 +120,19 @@ export function Offer() {
             <tr><th scope="row">Take-home / month</th><td className={th.best.regime === 'new' ? 'is-best' : ''}>{rupees(th.newSlip.inHandMonthly)}</td><td className={th.best.regime === 'old' ? 'is-best' : ''}>{rupees(th.oldSlip.inHandMonthly)}</td></tr>
           </tbody>
         </table>
+
+        <div className="fit-block">
+          <h4 className="fit-title">Which lifestyle does ₹{lpaVal} L buy in {home.name}?</h4>
+          <ul className="fit-list">
+            {lifestyleFit.map((f) => (
+              <li key={f.lifestyle} className={f.fits ? 'is-fit' : 'is-short'}>
+                <span className="fit-tag">{f.fits ? '✓' : '−'}</span>
+                <span className="fit-name">{LIFESTYLE_META[f.lifestyle].label}</span>
+                <span className="fit-need">needs ₹{lpaFull(f.ctc)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       </article>
 
       <div className="off-side">
@@ -133,7 +158,7 @@ export function Offer() {
             <ul className="equiv">
               <li><span>{home.name}</span><b>₹{lpaVal} L</b></li>
               {equivalents.map((e) => (
-                <li key={e.city.id}><span>{e.city.name}</span><b>₹{lpa(e.ctc)} L</b></li>
+                <li key={e.city.id}><span>{e.city.name}</span><b>₹{lpaFull(e.ctc)}</b></li>
               ))}
             </ul>
           </article>

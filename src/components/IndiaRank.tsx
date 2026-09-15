@@ -3,7 +3,7 @@ import { useMemo, useState } from 'react';
 import { STATES, type Region } from '../lib/cities';
 import type { CityCalc } from '../lib/engine';
 import { salaryCfg } from '../lib/engine';
-import { compact, lpa, rupees } from '../lib/format';
+import { compact, lpaFull, rupees } from '../lib/format';
 import { takeHome } from '../lib/tax';
 import { niceTicks, useWidth } from './chart';
 import { useStore } from './store';
@@ -85,7 +85,7 @@ function StripPlot({ ranked, homeId, compare, visible, onPick }: {
       {hov && (
         <div className="strip-tip" style={{ left: Math.min(Math.max(hov.cx, 90), w - 90), top: hov.cy - 12 }}>
           <b>{hov.c.city.name}</b>
-          <span>₹{lpa(hov.c.solved.best.ctc)} L · {rupees(hov.c.need)}/mo</span>
+          <span>₹{lpaFull(hov.c.solved.best.ctc)} · {rupees(hov.c.need)}/mo</span>
           <small>{hov.c.city.id === homeId ? 'Your city' : compare.includes(hov.c.city.id) ? 'In your comparison · click to remove' : 'Click to compare'}</small>
         </div>
       )}
@@ -94,7 +94,7 @@ function StripPlot({ ranked, homeId, compare, visible, onPick }: {
 }
 
 export function IndiaRank() {
-  const { state: s, update, all, home } = useStore();
+  const { state: s, update, all, home, household } = useStore();
   const [q, setQ] = useState('');
   const [tier, setTier] = useState<0 | 1 | 2 | 3>(0);
   const [region, setRegion] = useState<'all' | Region>('all');
@@ -133,8 +133,9 @@ export function IndiaRank() {
           <div>
             <h3 className="card-title">Your life, priced across India</h3>
             <p className="card-sub">
-              From ₹{lpa(cheapest.solved.best.ctc)} L in {cheapest.city.name} to ₹{lpa(priciest.solved.best.ctc)} L in {priciest.city.name}.
+              From ₹{lpaFull(cheapest.solved.best.ctc)} in {cheapest.city.name} to ₹{lpaFull(priciest.solved.best.ctc)} in {priciest.city.name}.
               {' '}Your city ranks #{rankOf.get(home.id)} of {ranked.length}.
+              {household.dual && ' Figures here assume one earner — your combined household number is on the Breakdown tab.'}
             </p>
           </div>
         </header>
@@ -179,7 +180,7 @@ export function IndiaRank() {
                 </span>
                 <span className="rank-val">
                   <span className="rank-bar" aria-hidden="true"><motion.span initial={false} animate={{ width: `${(ctc / maxCtc) * 100}%` }} transition={{ duration: 0.5 }} /></span>
-                  <b className="num">₹{lpa(ctc)} L</b>
+                  <b className="num">₹{lpaFull(ctc)}</b>
                 </span>
                 <span className="num hide-sm">{compact(c.need)}</span>
                 <span className="num hide-sm">{compact(c.rent)}</span>

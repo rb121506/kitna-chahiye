@@ -2,7 +2,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useMemo, useState } from 'react';
 import { GROUP_META, GROUP_ORDER, STATES } from '../lib/cities';
 import { compact, pct, rupees } from '../lib/format';
-import { buildInsights, type Tone } from '../lib/insights';
+import { biggestExpense, biggestLevers, buildInsights, type Tone } from '../lib/insights';
 import type { Slip } from '../lib/tax';
 import type { Group } from '../lib/types';
 import { useStore } from './store';
@@ -153,9 +153,31 @@ export function Overview() {
   const groups = GROUP_ORDER.filter((g) => calc.groups[g] > 0.5);
   const maxG = Math.max(...groups.map((g) => calc.groups[g]));
   const insights = useMemo(() => buildInsights(s, calc, all), [s, calc, all]);
+  const biggest = useMemo(() => biggestExpense(calc), [calc]);
+  const levers = useMemo(() => biggestLevers(s, calc, home, 2), [s, calc, home]);
 
   return (
     <div className="ov">
+      {(biggest || levers.length > 0) && (
+        <div className="lever-row">
+          {biggest && (
+            <article className="card lever-card">
+              <p className="eyebrow">Biggest expense</p>
+              <p className="lever-title">{biggest.label}</p>
+              <p className="lever-num">{rupees(biggest.value)}<small>/mo</small></p>
+              <p className="lever-body">{pct(biggest.value / calc.need)} of your required take-home goes here.</p>
+            </article>
+          )}
+          {levers.map((lv) => (
+            <article key={lv.id} className="card lever-card is-action">
+              <p className="eyebrow">Biggest lever</p>
+              <p className="lever-title">{lv.cutLabel}</p>
+              <p className="lever-num">−{compact(lv.ctcDrop)}<small>/yr CTC</small></p>
+              <p className="lever-body">Cutting {lv.label.toLowerCase()} by {compact(lv.monthlySave)}/mo drops your required CTC by {compact(lv.ctcDrop)} a year.</p>
+            </article>
+          ))}
+        </div>
+      )}
       <article className="card bd-card">
         <header className="card-head">
           <div>
